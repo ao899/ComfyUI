@@ -320,6 +320,19 @@ def start_comfyui(asyncio_loop=None):
     ))
     hook_breaker_ac10a0.restore_functions()
 
+    # Enhanced TPU Warmup after node initialization but before server setup
+    try:
+        import tpu_warmup
+        if tpu_warmup.is_tpu_warmup_needed():
+            logging.info("Running enhanced TPU warmup after node initialization...")
+            tpu_warmup.run_tpu_warmup_steps(args.tpu_warmup_steps)
+        elif tpu_warmup.is_manual_warmup_mode():
+            tpu_warmup.log_manual_warmup_usage()
+    except ImportError:
+        pass  # tpu_warmup module not available
+    except Exception as e:
+        logging.warning(f"Enhanced TPU warmup failed: {e}")
+
     cuda_malloc_warning()
     setup_database()
 

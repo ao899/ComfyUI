@@ -21,6 +21,17 @@ import comfy.utils
 import scipy.stats
 import numpy
 
+# Import TPU sampling utilities if available
+try:
+    from .tpu_sampling import (
+        is_tpu_sampling_available, 
+        create_tpu_sampling_context,
+        tpu_optimized_sampling_wrapper
+    )
+    TPU_SAMPLING_AVAILABLE = True
+except ImportError:
+    TPU_SAMPLING_AVAILABLE = False
+
 
 def add_area_dims(area, num_dims):
     while (len(area) // 2) < num_dims:
@@ -1045,6 +1056,41 @@ class CFGGuider:
 
 
 def sample(model, noise, positive, negative, cfg, device, sampler, sigmas, model_options={}, latent_image=None, denoise_mask=None, callback=None, disable_pbar=False, seed=None):
+    # TPU/XLA optimization path
+    if TPU_SAMPLING_AVAILABLE and model_management.is_tpu_device(device):
+        try:
+            # Create TPU sampling context  
+            latent_shape = noise.shape if noise is not None else (1, 4, 64, 64)
+            steps = len(sigmas) - 1 if sigmas is not None else 20
+            
+            tpu_context = create_tpu_sampling_context(
+                model=model,
+                latent_shape=latent_shape,
+                cfg_scale=cfg,
+                steps=steps
+            )
+            
+            # Execute with TPU optimization
+            with tpu_context:
+                with tpu_context.autocast_context():
+                    # Move inputs to TPU if needed
+                    if hasattr(model_management, 'tpu_manager'):
+                        if noise is not None:
+                            noise = model_management.tpu_manager.to_device(noise)
+                        if latent_image is not None:
+                            latent_image = model_management.tpu_manager.to_device(latent_image)
+                    
+                    # Create step boundary context for sampling
+                    with tpu_context.step_boundary("cfg_sampling"):
+                        cfg_guider = CFGGuider(model)
+                        cfg_guider.set_conds(positive, negative)
+                        cfg_guider.set_cfg(cfg)
+                        return cfg_guider.sample(noise, latent_image, sampler, sigmas, denoise_mask, callback, disable_pbar, seed)
+                        
+        except Exception as e:
+            logging.warning(f"TPU sampling failed, falling back to standard path: {e}")
+    
+    # Standard sampling path (GPU/CPU/fallback)
     cfg_guider = CFGGuider(model)
     cfg_guider.set_conds(positive, negative)
     cfg_guider.set_cfg(cfg)

@@ -91,6 +91,25 @@ parser.add_argument("--oneapi-device-selector", type=str, default=None, metavar=
 parser.add_argument("--disable-ipex-optimize", action="store_true", help="Disables ipex.optimize default when loading models with Intel's Extension for Pytorch.")
 parser.add_argument("--supports-fp8-compute", action="store_true", help="ComfyUI will act like if the device supports fp8 compute.")
 
+# TPU/XLA Backend Support
+tpu_group = parser.add_mutually_exclusive_group()
+tpu_group.add_argument("--tpu-enable", action="store_true", help="Enable TPU backend support if available.")
+tpu_group.add_argument("--tpu-disable", action="store_true", help="Disable TPU backend even if available.")
+
+parser.add_argument("--tpu-warmup-steps", type=int, default=2, help="Number of warmup steps to run on TPU for initial compilation cache (default: 2).")
+
+warmup_group = parser.add_mutually_exclusive_group()
+warmup_group.add_argument("--tpu-warmup-enable", action="store_true", help="Enable TPU warmup on startup (default).")
+warmup_group.add_argument("--no-tpu-warmup", action="store_true", help="Disable TPU warmup on startup.")
+
+# Advanced TPU/XLA options
+parser.add_argument("--tpu-manual-warmup", action="store_true", help="Use manual warmup mode (1-step warmup, then full execution).")
+parser.add_argument("--tpu-compilation-cache", action="store_true", default=True, help="Enable XLA compilation caching (default: enabled).")
+parser.add_argument("--tpu-autocast-bf16", action="store_true", default=True, help="Use bfloat16 autocast for TPU operations (default: enabled).")
+parser.add_argument("--tpu-shape-padding", action="store_true", default=True, help="Enable shape padding for better compilation cache hits (default: enabled).")
+parser.add_argument("--tpu-debug-metrics", action="store_true", help="Enable TPU/XLA debug metrics and logging.")
+parser.add_argument("--tpu-sync-steps", type=int, default=0, help="Force XLA sync every N steps (0=auto, default: 0).")
+
 class LatentPreviewMethod(enum.Enum):
     NoPreviews = "none"
     Auto = "auto"

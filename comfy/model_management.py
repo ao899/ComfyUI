@@ -137,6 +137,28 @@ try:
 except:
     ixuca_available = False
 
+# TPU/XLA backend support
+try:
+    import torch_xla.core.xla_model as xm
+    import torch_xla
+    tpu_available = True
+    if args.tpu_disable:
+        tpu_available = False
+        
+    # Import extended TPU/XLA manager
+    try:
+        from .tpu_xla import tpu_manager, is_tpu_available, get_tpu_device, tpu_autocast, tpu_step
+        xla_manager_available = True
+    except ImportError:
+        xla_manager_available = False
+        
+except ImportError:
+    tpu_available = False
+    xla_manager_available = False
+
+if args.tpu_enable and not tpu_available:
+    logging.warning("TPU was requested but torch_xla is not available. Falling back to other devices.")
+
 if args.cpu:
     cpu_state = CPUState.CPU
 
@@ -166,6 +188,37 @@ def is_ixuca():
         return True
     return False
 
+def is_tpu():
+    global tpu_available
+    if tpu_available:
+        return True
+    return False
+
+def is_tpu_xla_available():
+    """Check if advanced TPU/XLA manager is available"""
+    return xla_manager_available
+
+def get_tpu_autocast_context():
+    """Get TPU-optimized autocast context"""
+    if is_tpu_xla_available():
+        return tpu_autocast()
+    else:
+        # Fallback autocast
+        return torch.autocast(device_type="cpu", dtype=torch.bfloat16)
+
+def create_tpu_step_context(name: str = "default"):
+    """Create TPU step boundary context"""
+    if is_tpu_xla_available():
+        return tpu_step(name)
+    else:
+        # No-op context manager
+        from contextlib import nullcontext
+        return nullcontext()
+
+# Set CPU state based on TPU availability  
+if is_tpu():
+    cpu_state = CPUState.GPU  # TPU uses GPU-like behavior but with XLA device
+
 def get_torch_device():
     global directml_enabled
     global cpu_state
@@ -183,8 +236,19 @@ def get_torch_device():
             return torch.device("npu", torch.npu.current_device())
         elif is_mlu():
             return torch.device("mlu", torch.mlu.current_device())
+        elif is_tpu():
+            if is_tpu_xla_available():
+                return get_tpu_device()
+            else:
+                return xm.xla_device()
         else:
-            return torch.device(torch.cuda.current_device())
+            # CUDA fallback with error handling
+            try:
+                return torch.device(torch.cuda.current_device())
+            except:
+                # If CUDA is not available, fall back to CPU
+                logging.warning("CUDA not available, falling back to CPU")
+                return torch.device("cpu")
 
 def get_total_memory(dev=None, torch_total_too=False):
     global directml_enabled
@@ -216,12 +280,21 @@ def get_total_memory(dev=None, torch_total_too=False):
             _, mem_total_mlu = torch.mlu.mem_get_info(dev)
             mem_total_torch = mem_reserved
             mem_total = mem_total_mlu
+        elif is_tpu():
+            # TPU memory info is not easily accessible, fall back to CPU memory
+            mem_total = psutil.virtual_memory().total
+            mem_total_torch = mem_total
         else:
-            stats = torch.cuda.memory_stats(dev)
-            mem_reserved = stats['reserved_bytes.all.current']
-            _, mem_total_cuda = torch.cuda.mem_get_info(dev)
-            mem_total_torch = mem_reserved
-            mem_total = mem_total_cuda
+            try:
+                stats = torch.cuda.memory_stats(dev)
+                mem_reserved = stats['reserved_bytes.all.current']
+                _, mem_total_cuda = torch.cuda.mem_get_info(dev)
+                mem_total_torch = mem_reserved
+                mem_total = mem_total_cuda
+            except:
+                # Fallback for unsupported devices
+                mem_total = psutil.virtual_memory().total
+                mem_total_torch = mem_total
 
     if torch_total_too:
         return (mem_total, mem_total_torch)
